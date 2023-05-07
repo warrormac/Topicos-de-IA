@@ -1,42 +1,85 @@
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from pandas_datareader import data as pdr
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
 import yfinance as yf
-
-# Configurar yfinance
-yf.pdr_override()
-
-# Definir símbolos de acciones y fechas
-symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', '^GSPC', '^DJI']
-start_date = '2015-01-01'
-end_date = '2023-03-31'
+import datetime
 
 # Obtener datos de Yahoo Finance
-data = pdr.get_data_yahoo(symbols, start=start_date, end=end_date)
+start_date = datetime.datetime(2015, 1, 1)
+end_date = datetime.datetime(2020, 12, 31)
+stocks = ['AAPL', 'AMZN', 'GOOGL', 'MSFT']
+df = yf.download(stocks, start=start_date, end=end_date)
 
-# Seleccionar solo los precios de cierre ajustados
-adj_close = data['Adj Close'].copy()
+# Obtener datos de índices de Yahoo Finance
+index_df = yf.download('^GSPC ^DJI', start=start_date, end=end_date)
 
-# Agregar los precios de las acciones de Microsoft, Google y Amazon como variables correlacionadas
-adj_close.loc[:, 'MSFT'] = data['Adj Close']['MSFT']
-adj_close.loc[:, 'GOOGL'] = data['Adj Close']['GOOGL']
-adj_close.loc[:, 'AMZN'] = data['Adj Close']['AMZN']
+# Unir los datos en un solo DataFrame
+data = pd.DataFrame()
+data['AAPL'] = df['Adj Close']['AAPL']
+data['AMZN'] = df['Adj Close']['AMZN']
+data['GOOGL'] = df['Adj Close']['GOOGL']
+data['MSFT'] = df['Adj Close']['MSFT']
+data['S&P500'] = index_df['Adj Close']['^GSPC']
+data['DowJones'] = index_df['Adj Close']['^DJI']
 
-# Agregar los valores de los índices S&P 500 y Dow Jones como variables correlacionadas
-sp500_close = data['Adj Close']['^GSPC']
-dow_close = data['Adj Close']['^DJI']
-adj_close.loc[:, 'S&P500'] = sp500_close
-adj_close.loc[:, 'DowJones'] = dow_close
+# Realizar la transformación de series de tiempo con un time delay de 5 días
+lagged_data = pd.DataFrame()
+for i in range(5):
+    lagged_data[f'AAPL_Lag{i+1}'] = data['AAPL'].shift(i+1)
+    lagged_data[f'AMZN_Lag{i+1}'] = data['AMZN'].shift(i+1)
+    lagged_data[f'GOOGL_Lag{i+1}'] = data['GOOGL'].shift(i+1)
+    lagged_data[f'MSFT_Lag{i+1}'] = data['MSFT'].shift(i+1)
+    lagged_data[f'S&P500_Lag{i+1}'] = data['S&P500'].shift(i+1)
+    lagged_data[f'DowJones_Lag{i+1}'] = data['DowJones'].shift(i+1)
 
-# Verificar si hay datos disponibles para el mes de abril de 2023
-if '2023-04-01' in adj_close.index:
-    # Obtener los datos del mes de abril de 2023 como conjunto de prueba
-    test_data = adj_close.loc['2023-04-01':'2023-04-30']
-    # Mostrar el conjunto de datos de prueba
-    print(test_data)
-else:
-    print("No hay datos disponibles para el mes de abril de 2023.")
+lagged_data['AAPL'] = data['AAPL']  # Variable dependiente
 
-# Mostrar el conjunto de datos de entrenamiento
-print(adj_close)
+# Eliminar filas con valores nulos generados por el time delay
+lagged_data.dropna(inplace=True)
+
+# Dividir los datos en conjuntos de entrenamiento y prueba
+X = lagged_data.drop('AAPL', axis=1)  # Variables independientes
+y = lagged_data['AAPL']  # Variable dependiente
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Crear y ajustar el modelo de regresión lineal
+model = LinearRegression()
+model.fit(X_train, y_train)
+
+# Realizar predicciones en el conjunto de prueba
+y_pred = model.predict(X_test)
+
+# Calcular el error cuadrático medio (MSE)
+mse = mean_squared_error(y_test, y_pred)
+print('Mean Squared Error:', mse)
+
+# Prepare new data for prediction
+new_data = pd.DataFrame()
+new_data['AAPL'] = df['Adj Close']['AAPL'][-5:].values
+new_data['AMZN'] = df['Adj Close']['AMZN'][-5:].values
+new_data['GOOGL'] = df['Adj Close']['GOOGL'][-5:].values
+new_data['MSFT'] = df['Adj Close']['MSFT'][-5:].values
+new_data['S&P500'] = index_df['Adj Close']['^GSPC'][-5:].values
+new_data['DowJones'] = index_df['Adj Close']['^DJI'][-5:].values
+
+# Add lagged features for the new data
+for i in range(5):
+    new_data[f'AAPL_Lag{i+1}'] = lagged_data[f'AAPL_Lag{i+1}'].shift(1)[-5:].values
+    new_data[f'AMZN_Lag{i+1}'] = lagged_data[f'AMZN_Lag{i+1}'].shift(1)[-5:].values
+    new_data[f'GOOGL_Lag{i+1}'] = lagged_data[f'GOOGL_Lag{i+1}'].shift(1)[-5:].values
+    new_data[f'MSFT_Lag{i+1}'] = lagged_data[f'MSFT_Lag{i+1}'].shift(1)[-5:].values
+    new_data[f'S&P500_Lag{i+1}'] = lagged_data[f'S&P500_Lag{i+1}'].shift(1)[-5:].values
+    new_data[f'DowJones_Lag{i+1}'] = lagged_data[f'DowJones_Lag{i+1}'].shift(1)[-5:].values
+
+# Ensure the column order of the new data matches the training data
+new_data = new_data[X.columns]
+
+# Make predictions on the new data
+predictions = model.predict(new_data)
+
+# Display the predicted prices
+print('Predicted Prices:')
+for i, pred in enumerate(predictions):
+    print(f"Day {i+1}: {pred}")
